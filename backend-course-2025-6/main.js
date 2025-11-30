@@ -6,7 +6,7 @@ const multer = require('multer');
 const swaggerUi = require('swagger-ui-express');
 const swaggerJsDoc = require('swagger-jsdoc');
 
-// --- Налаштування Commander (Звіт, Частина 1) ---
+// --- 1. CLI Options ---
 const program = new Command();
 program
     .requiredOption('-h, --host <host>', 'Server host')
@@ -16,188 +16,255 @@ program
 program.parse(process.argv);
 const options = program.opts();
 
-// --- Підготовка папок ---
+// --- 2. Prepare Cache Folder ---
 const cacheDir = path.resolve(options.cache);
 const dbFile = path.join(cacheDir, 'inventory.json');
 
-if (!fs.existsSync(cacheDir)) {
-    fs.mkdirSync(cacheDir, { recursive: true });
-}
-if (!fs.existsSync(dbFile)) {
-    fs.writeFileSync(dbFile, JSON.stringify([]));
-}
+if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+if (!fs.existsSync(dbFile)) fs.writeFileSync(dbFile, JSON.stringify([]));
 
-// --- Налаштування Express та Multer ---
+// --- 3. Express ---
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Uploads
 const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, cacheDir),
-    filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, uniqueSuffix + path.extname(file.originalname));
-    }
+    filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
 });
-const upload = multer({ storage: storage });
+const upload = multer({ storage });
 
-// --- Swagger Конфігурація (Звіт, Частина 3) ---
+// --- 4. Swagger ---
 const swaggerOptions = {
     definition: {
         openapi: '3.0.0',
         info: {
-            title: 'Inventory Service API',
-            version: '1.0.0',
-            description: 'API documentation for the inventory service'
+            title: 'Inventory API',
+            version: '1.0.0'
         }
     },
-    apis: ['./index.js'] // Вказуємо поточний файл для пошуку коментарів
+    apis: ['main.js']
 };
-const swaggerSpec = swaggerJsDoc(swaggerOptions);
-app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
-// --- Допоміжні функції ---
-const readInventory = () => {
-    try {
-        return JSON.parse(fs.readFileSync(dbFile));
-    } catch { return []; }
+const swaggerDocs = swaggerJsDoc(swaggerOptions);
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
+
+// --- Helper functions ---
+const readInv = () => {
+    try { return JSON.parse(fs.readFileSync(dbFile)); }
+    catch { return []; }
 };
-const writeInventory = (data) => fs.writeFileSync(dbFile, JSON.stringify(data, null, 2));
+const writeInv = (data) => {
+    fs.writeFileSync(dbFile, JSON.stringify(data, null, 2));
+};
 
-// --- Маршрути (API) ---
+// --- 6. Routes ---
 
 /**
  * @openapi
  * /inventory:
- * get:
- * summary: Get all inventory items
- * responses:
- * 200:
- * description: Success
+ *   get:
+ *     summary: Get all items
+ *     responses:
+ *       200:
+ *         description: Success
  */
 app.get('/inventory', (req, res) => {
-    res.json(readInventory());
+    res.json(readInv());
 });
 
 /**
  * @openapi
  * /inventory/{id}:
- * get:
- * summary: Get item by ID
- * parameters:
- * - in: path
- * name: id
- * required: true
- * schema:
- * type: string
- * responses:
- * 200:
- * description: Success
- * 404:
- * description: Not found
+ *   get:
+ *     summary: Get item by ID
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Found
+ *       404:
+ *         description: Not found
  */
 app.get('/inventory/:id', (req, res) => {
-    const item = readInventory().find(i => i.id == req.params.id);
-    if (!item) return res.status(404).json({ error: "Not found" });
-    res.json(item);
+    const item = readInv().find(i => i.id == req.params.id);
+    item ? res.json(item) : res.status(404).json({ error: 'Not found' });
 });
 
-// Отримання фото
+// Get photo
 app.get('/inventory/:id/photo', (req, res) => {
-    const item = readInventory().find(i => i.id == req.params.id);
-    if (!item || !item.photo) return res.status(404).json({ error: "Photo not found" });
+    const item = readInv().find(i => i.id == req.params.id);
+    if (!item || !item.photo) return res.status(404).json({ error: 'No photo' });
+    if (!fs.existsSync(item.photo)) return res.status(404).json({ error: 'File missing' });
     res.sendFile(path.resolve(item.photo));
 });
 
-// Форми HTML
+// HTML Forms
 app.get('/RegisterForm.html', (req, res) => res.sendFile(path.join(__dirname, 'RegisterForm.html')));
 app.get('/SearchForm.html', (req, res) => res.sendFile(path.join(__dirname, 'SearchForm.html')));
 
 /**
  * @openapi
  * /register:
- * post:
- * summary: Register a new inventory item
- * consumes:
- * - multipart/form-data
- * parameters:
- * - in: formData
- * name: inventory_name
- * required: true
- * type: string
- * - in: formData
- * name: description
- * type: string
- * - in: formData
- * name: photo
- * type: file
- * responses:
- * 201:
- * description: Created
- * 400:
- * description: Name is required
+ *   post:
+ *     summary: Add item
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               inventory_name:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *               photo:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       201:
+ *         description: Created
+ *       400:
+ *         description: Name required
  */
 app.post('/register', upload.single('photo'), (req, res) => {
-    if (!req.body.inventory_name) return res.status(400).json({ error: "Name is required" });
+    if (!req.body.inventory_name)
+        return res.status(400).json({ error: 'Name required' });
 
-    const inventory = readInventory();
+    const inv = readInv();
+    const id = inv.length ? Math.max(...inv.map(i => i.id)) + 1 : 1;
+
     const newItem = {
-        id: inventory.length > 0 ? Math.max(...inventory.map(i => i.id)) + 1 : 1, // Простий інкремент ID як у звіті
+        id,
         name: req.body.inventory_name,
         description: req.body.description,
         photo: req.file ? req.file.path : null,
-        photoUrl: req.file ? `http://${options.host}:${options.port}/inventory/${inventory.length + 1}/photo` : null
+        photoUrl: req.file ? `http://${options.host}:${options.port}/inventory/${id}/photo` : null
     };
 
-    inventory.push(newItem);
-    writeInventory(inventory);
-    res.status(201).json({ message: "Created", item: newItem });
+    inv.push(newItem);
+    writeInv(inv);
+
+    res.status(201).json({ message: 'Created', item: newItem });
 });
 
-// Пошук (Адаптовано для обох методів: GET для HTML форми, POST для Postman/PDF)
-const handleSearch = (req, res, id, includePhoto) => {
-    const item = readInventory().find(i => i.id == id);
-    if (!item) return res.status(404).json({ error: "Not found" });
+/**
+ * @openapi
+ * /search:
+ *   post:
+ *     summary: Search item
+ *     requestBody:
+ *       content:
+ *         application/x-www-form-urlencoded:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               id:
+ *                 type: string
+ *               has_photo:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Found
+ *       404:
+ *         description: Not found
+ */
+const doSearch = (req, res, id, withPhoto) => {
+    const item = readInv().find(i => i.id == id);
+    if (!item) return res.status(404).json({ error: 'Not found' });
 
-    const responseItem = { ...item };
-    // Логіка додавання посилання на фото (як у звіті)
-    if (includePhoto === 'on' || includePhoto === 'true' || includePhoto === true) {
-        if (responseItem.photo) responseItem.description += ` (Photo link: ${responseItem.photoUrl})`;
+    const resp = { ...item };
+    if (withPhoto === 'on' || withPhoto === 'true' || withPhoto === true) {
+        if (resp.photo) resp.description += ` (Photo: ${resp.photoUrl})`;
     }
-    res.json(responseItem);
+
+    res.json(resp);
 };
 
-app.get('/search', (req, res) => handleSearch(req, res, req.query.id, req.query.includePhoto));
-app.post('/search', (req, res) => handleSearch(req, res, req.body.id, req.body.has_photo || req.body.includePhoto));
+app.get('/search', (req, res) =>
+    doSearch(req, res, req.query.id, req.query.includePhoto)
+);
 
-// Оновлення (PUT)
+app.post('/search', (req, res) =>
+    doSearch(req, res, req.body.id, req.body.has_photo || req.body.includePhoto)
+);
+
+/**
+ * @openapi
+ * /inventory/{id}:
+ *   put:
+ *     summary: Update item
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Updated
+ */
 app.put('/inventory/:id', (req, res) => {
-    const inventory = readInventory();
-    const index = inventory.findIndex(i => i.id == req.params.id);
-    if (index === -1) return res.status(404).json({ error: "Not found" });
+    const inv = readInv();
+    const idx = inv.findIndex(i => i.id == req.params.id);
 
-    if (req.body.name) inventory[index].name = req.body.name;
-    if (req.body.description) inventory[index].description = req.body.description;
+    if (idx === -1) return res.status(404).json({ error: 'Not found' });
 
-    writeInventory(inventory);
-    res.json({ message: "Updated", item: inventory[index] });
+    if (req.body.name) inv[idx].name = req.body.name;
+    if (req.body.description) inv[idx].description = req.body.description;
+
+    writeInv(inv);
+    res.json({ message: 'Updated', item: inv[idx] });
 });
 
-// Видалення (DELETE)
+/**
+ * @openapi
+ * /inventory/{id}:
+ *   delete:
+ *     summary: Delete item
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Deleted
+ */
 app.delete('/inventory/:id', (req, res) => {
-    let inventory = readInventory();
-    const index = inventory.findIndex(i => i.id == req.params.id);
-    if (index === -1) return res.status(404).json({ error: "Not found" });
+    let inv = readInv();
+    const idx = inv.findIndex(i => i.id == req.params.id);
 
-    const item = inventory[index];
-    if (item.photo && fs.existsSync(item.photo)) fs.unlinkSync(item.photo);
+    if (idx === -1) return res.status(404).json({ error: 'Not found' });
 
-    inventory.splice(index, 1);
-    writeInventory(inventory);
-    res.json({ message: "Deleted" });
+    if (inv[idx].photo && fs.existsSync(inv[idx].photo)) {
+        try { fs.unlinkSync(inv[idx].photo); } catch { }
+    }
+
+    inv.splice(idx, 1);
+    writeInv(inv);
+
+    res.json({ message: 'Deleted' });
 });
 
-// --- Запуск ---
+// --- Start server ---
 app.listen(options.port, options.host, () => {
     console.log(`Server running at http://${options.host}:${options.port}`);
+    console.log(`Docs: http://${options.host}:${options.port}/docs`);
 });
