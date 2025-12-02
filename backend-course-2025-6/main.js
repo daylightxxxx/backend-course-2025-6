@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const { Command } = require('commander');
 const path = require('path');
 const fs = require('fs');
@@ -28,7 +28,7 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Uploads
+// Upload storage
 const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, cacheDir),
     filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
@@ -55,11 +55,12 @@ const readInv = () => {
     try { return JSON.parse(fs.readFileSync(dbFile)); }
     catch { return []; }
 };
+
 const writeInv = (data) => {
     fs.writeFileSync(dbFile, JSON.stringify(data, null, 2));
 };
 
-// --- 6. Routes ---
+// --- Routes ---
 
 /**
  * @openapi
@@ -101,6 +102,7 @@ app.get('/inventory/:id/photo', (req, res) => {
     const item = readInv().find(i => i.id == req.params.id);
     if (!item || !item.photo) return res.status(404).json({ error: 'No photo' });
     if (!fs.existsSync(item.photo)) return res.status(404).json({ error: 'File missing' });
+
     res.sendFile(path.resolve(item.photo));
 });
 
@@ -139,12 +141,16 @@ app.post('/register', upload.single('photo'), (req, res) => {
     const inv = readInv();
     const id = inv.length ? Math.max(...inv.map(i => i.id)) + 1 : 1;
 
+    const photoUrl = req.file
+        ? `http://${options.host}:${options.port}/inventory/${id}/photo`
+        : null;
+
     const newItem = {
         id,
         name: req.body.inventory_name,
         description: req.body.description,
         photo: req.file ? req.file.path : null,
-        photoUrl: req.file ? `http://${options.host}:${options.port}/inventory/${id}/photo` : null
+        photoUrl
     };
 
     inv.push(newItem);
@@ -179,8 +185,11 @@ const doSearch = (req, res, id, withPhoto) => {
     if (!item) return res.status(404).json({ error: 'Not found' });
 
     const resp = { ...item };
+
     if (withPhoto === 'on' || withPhoto === 'true' || withPhoto === true) {
-        if (resp.photo) resp.description += ` (Photo: ${resp.photoUrl})`;
+        if (resp.photoUrl) {
+            resp.description += ` (Photo: ${resp.photoUrl})`;
+        }
     }
 
     res.json(resp);
@@ -221,12 +230,13 @@ app.post('/search', (req, res) =>
  */
 app.put('/inventory/:id', (req, res) => {
     const inv = readInv();
+
     const idx = inv.findIndex(i => i.id == req.params.id);
 
     if (idx === -1) return res.status(404).json({ error: 'Not found' });
 
-    if (req.body.name) inv[idx].name = req.body.name;
-    if (req.body.description) inv[idx].description = req.body.description;
+    if (req.body.name !== undefined) inv[idx].name = req.body.name;
+    if (req.body.description !== undefined) inv[idx].description = req.body.description;
 
     writeInv(inv);
     res.json({ message: 'Updated', item: inv[idx] });
